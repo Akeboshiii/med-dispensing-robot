@@ -53,6 +53,21 @@ class DS1302:
 		return ((dec // 10) << 4) | (dec % 10)
 
 	# High-level methods
+	# def read_time(self):
+		# GPIO.output(self.ce, 1)
+		# self._write_byte(0xBF)  # Burst read command
+
+		# raw = [self._read_byte() for _ in range(8)]
+		# GPIO.output(self.ce, 0)
+
+		# sec    = self._bcd_to_dec(raw[0] & 0x7F)
+		# minute = self._bcd_to_dec(raw[1] & 0x7F)
+		# hour   = self._bcd_to_dec(raw[2] & 0x3F)  # 24-hour mode
+		# date   = self._bcd_to_dec(raw[3] & 0x3F)
+		# month  = self._bcd_to_dec(raw[4] & 0x1F)
+		# year   = self._bcd_to_dec(raw[6]) + 2000
+
+		# return datetime(year, month, date, hour, minute, sec)
 	def read_time(self):
 		GPIO.output(self.ce, 1)
 		self._write_byte(0xBF)  # Burst read command
@@ -60,14 +75,27 @@ class DS1302:
 		raw = [self._read_byte() for _ in range(8)]
 		GPIO.output(self.ce, 0)
 
-		sec    = self._bcd_to_dec(raw[0] & 0x7F)
-		minute = self._bcd_to_dec(raw[1] & 0x7F)
-		hour   = self._bcd_to_dec(raw[2] & 0x3F)  # 24-hour mode
-		date   = self._bcd_to_dec(raw[3] & 0x3F)
-		month  = self._bcd_to_dec(raw[4] & 0x1F)
-		year   = self._bcd_to_dec(raw[6]) + 2000
+		# print("RTC RAW:", raw)  # <--- ADD THIS
 
-		return datetime(year, month, date, hour, minute, sec)
+		try:
+			sec    = self._bcd_to_dec(raw[0] & 0x7F)
+			minute = self._bcd_to_dec(raw[1] & 0x7F)
+			hour   = self._bcd_to_dec(raw[2] & 0x3F)
+			date   = self._bcd_to_dec(raw[3] & 0x3F)
+			month  = self._bcd_to_dec(raw[4] & 0x1F)
+			year   = self._bcd_to_dec(raw[6]) + 2000
+
+			# safety clamp
+			if not 1 <= month <= 12: month = 1
+			if not 1 <= date  <= 31: date  = 1
+			if not 0 <= hour  <= 23: hour  = 0
+			if not 0 <= minute<= 59: minute= 0
+			if not 0 <= sec   <= 59: sec   = 0
+
+			return datetime(year, month, date, hour, minute, sec)
+		except Exception as e:
+			print("RTC DECODE ERROR:", e)
+			return datetime(2000, 1, 1, 0, 0, 0)  # fallback to safe default
 
 
 # custom functions
@@ -86,11 +114,23 @@ def moveServoAngle():
 # for movement
 def forward():
 	print("forward")
+	GPIO.output(motorLeftPin1, False)
+	GPIO.output(motorLeftPin2, True)
+	GPIO.output(motorRightPin1, False)
+	GPIO.output(motorRightPin2, True)
 	
 def rotate360():
 	print("360")
+	GPIO.output(motorLeftPin1, True)
+	GPIO.output(motorLeftPin2, False)
+	GPIO.output(motorRightPin1, False)
+	GPIO.output(motorRightPin2, True)
 	
 def stop():
+	GPIO.output(motorLeftPin1, True)
+	GPIO.output(motorLeftPin2, True)
+	GPIO.output(motorRightPin1, True)
+	GPIO.output(motorRightPin2, True)
 	print("stop")
 
 # for ultrasonic sensor
@@ -118,7 +158,7 @@ def getDistance():
 		
 # for queue dispensing of medicine
 arrSched = [
-	{"hour": 15, "minute": 54, "second": 30, "medicine": "Paracetamol"},
+	{"hour": 16, "minute": 15, "second": 30, "medicine": "Paracetamol"},
 	{"hour": 1,  "minute": 2,  "second": 0, "medicine": "Mefenamic"},
 	{"hour": 1,  "minute": 4,  "second": 0, "medicine": "Ibuprofen"},
 	{"hour": 1,  "minute": 6,  "second": 0, "medicine": "idk"},
@@ -131,6 +171,7 @@ arrSched = [
 def debugLog():
 	now = rtc.read_time()
 	print(f"Current time: {now.hour:02d}:{now.minute:02d}:{now.second:02d} ultrasonic:{getDistance()}")
+	lcdWrite(f"{now.hour:02d}:{now.minute:02d}:{now.second:02d}")
 	# lcdWrite("Hello World")
 
 
@@ -138,8 +179,10 @@ def debugLog():
 GPIO.setmode(GPIO.BCM)
 
 servoPin = 17
-motorLeftPin = 5
-motorRightPin = 6
+motorLeftPin1 = 12
+motorLeftPin2 = 16
+motorRightPin1 = 13
+motorRightPin2 = 26
 buzzerPin = 10
 
 # ultrasonic sensor pins
@@ -147,8 +190,10 @@ trigPin = 23
 echoPin = 24
 
 # setup
-GPIO.setup(motorLeftPin, GPIO.OUT)
-GPIO.setup(motorRightPin, GPIO.OUT)
+GPIO.setup(motorLeftPin1, GPIO.OUT)
+GPIO.setup(motorLeftPin2, GPIO.OUT)
+GPIO.setup(motorRightPin1, GPIO.OUT)
+GPIO.setup(motorRightPin2, GPIO.OUT)
 GPIO.setup(buzzerPin, GPIO.OUT)
 GPIO.setup(trigPin, GPIO.OUT)
 GPIO.setup(echoPin, GPIO.IN)
@@ -165,7 +210,7 @@ distanceThreshold = 20
 CLK_PIN = 25   # SCLK
 DAT_PIN = 27   # I/O
 RST_PIN = 22   # CE (RST)
-rtc = DS1302(ce=RST_PIN, data=DAT_PIN, sclk=CLK_PIN, debug=False)
+rtc = DS1302(ce=RST_PIN, data=DAT_PIN, sclk=CLK_PIN, debug=True)
 
 # other variables
 medicineIndex = 0
@@ -175,6 +220,7 @@ itsTime = False
 try:
 	while True:
 		debugLog()
+		# forward()
 		sched = arrSched[medicineIndex]
 
 		# if time matches, set flag
@@ -183,29 +229,33 @@ try:
 
 		# if flag is set, execute once
 		if itsTime:
+			lcd.clear()
 			forward()
 			time.sleep(1)
 			dist = getDistance()
-			if dist is not None and dist < distanceThreshold:
-				stop()
-				time.sleep(.5)
-				moveServoAngle()
-				lcdWrite(f"{sched['medicine']} is delivered.")
-				GPIO.output(buzzerPin, True)
-				time.sleep(.5)
-				rotate360()
-				GPIO.output(buzzerPin, False)
-				time.sleep(.5)
-				forward()
-				dist = getDistance()
-				time.sleep(1)
-				if dist is not None and dist < distanceThreshold:
-					rotate360()
-					time.sleep(.5)
-					stop()
-					medicineIndex += 1
-					lcd.clear()
-					itsTime = False  # reset
+			# if dist is not None and dist < distanceThreshold:
+			stop()
+			time.sleep(.5)
+			moveServoAngle()
+			lcdWrite(f"{sched['medicine']} is delivered.")
+			GPIO.output(buzzerPin, True)
+			time.sleep(.5)
+			rotate360()
+			time.sleep(1)
+			GPIO.output(buzzerPin, False)
+			time.sleep(.5)
+			forward()
+			time.sleep(1)
+			dist = getDistance()
+			time.sleep(1)
+				# if dist is not None and dist < distanceThreshold:
+			rotate360()
+			time.sleep(1)
+			time.sleep(.5)
+			stop()
+			medicineIndex += 1
+			lcd.clear()
+			itsTime = False  # reset
 
 		if medicineIndex == len(arrSched):
 			lcdWrite("all schedule finished")
